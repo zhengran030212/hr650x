@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HR650X 风扇</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%23E36F12' x='6' y='2' width='4' height='12'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div>
+        <p class="eyebrow">风扇调节</p>
+        <h1>HR650X</h1>
+      </div>
+      <div class="status">
+        <span id="lamp" class="lamp" aria-hidden="true"></span>
+        <div>
+          <p id="status-label">待命</p>
+          <p id="target" class="muted"></p>
+        </div>
+      </div>
+    </header>
+
+    <section class="face">
+      <div class="gauge">
+        <p class="gauge-temp"><span id="temp">—</span><span class="unit">°C</span></p>
+        <p id="caption" class="caption">读取后显示在曲线上。</p>
+        <dl class="readout">
+          <div>
+            <dt>曲线档</dt>
+            <dd id="curve-duty">—</dd>
+          </div>
+          <div>
+            <dt>已写入</dt>
+            <dd id="written-duty">—</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="manual" data-edit>
+        <label for="manual">手动转速</label>
+        <div class="slider-row">
+          <input id="manual" type="range" min="0" max="100" step="1" value="20" aria-valuemin="0" aria-valuemax="100">
+          <output id="manual-value" for="manual">20%</output>
+        </div>
+        <button id="write-btn" type="button">写入</button>
+      </div>
+
+      <form class="link" data-edit autocomplete="off">
+        <label>
+          接口
+          <select id="iface">
+            <option value="lanplus">BMC 网络</option>
+            <option value="open">本机</option>
+          </select>
+        </label>
+        <label id="host-label">
+          地址
+          <input id="host" name="bmc-host" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="pair">
+          <label>
+            用户
+            <input id="username" name="bmc-user" autocomplete="off" spellcheck="false">
+          </label>
+          <label>
+            密码
+            <input id="password" name="bmc-secret" type="password" autocomplete="new-password">
+          </label>
+        </div>
+        <div class="actions">
+          <button id="read-btn" type="button">读取</button>
+          <button id="auto-btn" type="button" class="primary">开始自动</button>
+        </div>
+        <label class="check">
+          <input id="demo" type="checkbox">
+          模拟，不写 BMC
+        </label>
+        <p id="stop-hint" class="muted"></p>
+        <p id="dirty-note" class="muted" hidden>曲线还没保存</p>
+      </form>
+    </section>
+
+    <section class="meter" aria-label="风扇曲线">
+      <svg id="curve" role="img" aria-label="风扇曲线"></svg>
+      <div class="policy" data-edit>
+        <label>轮询
+          <span class="field"><input id="interval" inputmode="decimal" value="10"><span>秒</span></span>
+        </label>
+        <label>回差
+          <span class="field"><input id="hysteresis" inputmode="decimal" value="2"><span>°C</span></span>
+        </label>
+        <label>在线最低
+          <span class="field"><input id="min-speed" inputmode="numeric" value="10"><span>%</span></span>
+        </label>
+        <label>失败转速
+          <span class="field"><input id="fallback" inputmode="numeric" value="100"><span>%</span></span>
+        </label>
+        <label>停止后
+          <span class="field"><input id="exit-speed" inputmode="numeric" value="100"><span>%</span></span>
+        </label>
+        <button id="save-btn" type="button">保存曲线</button>
+      </div>
+      <div id="bands" class="bands" data-edit></div>
+      <button id="add-band" type="button" class="quiet">加一档</button>
+      <p id="form-error" class="fault" role="alert" hidden></p>
+    </section>
+
+    <section class="log" aria-label="记录">
+      <ol id="log"></ol>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
