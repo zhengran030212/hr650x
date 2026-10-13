@@ -100,6 +100,7 @@ class Config:
     hysteresis: float
     fallback_speed: int
     min_speed_on: int
+    boot_speed: int
     exit_speed: int | None
     sensor_pattern: str
     command_timeout: float
@@ -110,6 +111,25 @@ class SensorClient(Protocol):
     def read_sensors(self) -> str: ...
 
     def set_speed(self, speed: int) -> None: ...
+
+
+def parse_chassis_power(text: str) -> bool | None:
+    lowered = text.lower()
+    if "is off" in lowered:
+        return False
+    if "is on" in lowered:
+        return True
+    return None
+
+
+def chassis_power_on(client: SensorClient) -> bool | None:
+    method = getattr(client, "chassis_power_on", None)
+    if method is None:
+        return None
+    try:
+        return method()
+    except IpmiError:
+        return None
 
 
 def format_duty(speed: int) -> str:
@@ -189,9 +209,9 @@ def cpu_temperature_sample(text: str, fallback: re.Pattern[str]) -> Sample:
         except ValueError as exc:
             raise SensorParseError(f"传感器 {columns[0]} 的读数无法解析：{columns[1]}") from exc
     present = tuple((name, value) for name, value in found if value is not None)
-    if present:
+    if found:
         return Sample(
-            temp=max(value for _, value in present),
+            temp=max(value for _, value in present) if present else None,
             matched=len(found),
             valid=len(present),
             readings=present,
@@ -213,6 +233,7 @@ class FanPolicy:
         fallback_speed: int,
         min_speed_on: int,
         na_grace: int,
+        boot_speed: int = 20,
     ) -> None:
         if not bands:
             raise ValueError("至少要有一档风扇曲线")
@@ -221,29 +242,28 @@ class FanPolicy:
         self.fallback_speed = fallback_speed
         self.min_speed_on = min_speed_on
         self.na_grace = na_grace
+        self.boot_speed = boot_speed
         self.active: int | None = None
-        self.seen_online = False
-        self.na_streak = 0
+        self.last_online_speed: int | None = None
 
-    def decide(self, sample: Sample | None) -> Decision:
-        if sample is None:
-            self.active = len(self.bands)
-            return Decision(self.fallback_speed, "传感器读取失败，回退高转速")
-
-        if sample.valid == 0:
-            self.na_streak += 1
-            if self.seen_online and self.na_streak <= self.na_grace:
-                self.active = len(self.bands)
-                return Decision(self.fallback_speed, "CPU 温度无效，暂时拉高")
+    def decide(self, sample: Sample | None, *, power_on: bool | None = None) -> Decision:
+        unavailable = sample is None or sample.valid == 0
+        if unavailable and power_on is False:
+            self.active = None
+            self.last_online_speed = None
             index = self._index_for(0.0, online=False)
-            return Decision(self._speed_of(index, online=False), "CPU 温度无效，按关机处理")
+            return Decision(self._speed_of(index, online=False), "主机关机")
+        if unavailable:
+            if self.last_online_speed is None:
+                return Decision(self.boot_speed, "开机中，CPU 温度还读不到")
+            return Decision(self.last_online_speed, "CPU 温度暂时读不到，保持当前转速")
 
-        self.na_streak = 0
-        self.seen_online = True
-        assert sample.temp is not None
+        assert sample is not None and sample.temp is not None
         index = self._index_for(sample.temp, online=True)
+        speed = self._speed_of(index, online=True)
+        self.last_online_speed = speed
         return Decision(
-            self._speed_of(index, online=True),
+            speed,
             f"CPU 最高 {sample.temp:.1f}°C（{sample.valid}/{sample.matched}）",
         )
 
@@ -339,6 +359,9 @@ class IpmiClient:
         duty = format_duty(speed)
         self._run(("raw", "0x2e", "0x30", "0x00", "0x00", duty))
 
+    def chassis_power_on(self) -> bool | None:
+        return parse_chassis_power(self._run(("chassis", "power", "status")))
+
     def _run(self, command: Sequence[str]) -> str:
         args = build_ipmi_args(self.target, command)
         return self.runner(args, ipmi_env(self.target, self.environ), self.timeout)
@@ -371,6 +394,7 @@ class Controller:
         pattern = self.pattern
         dry_run = self.dry_run
         self.last_error = None
+        power_on = chassis_power_on(client)
         try:
             self.last_sample = cpu_temperature_sample(client.read_sensors(), pattern)
         except (IpmiError, SensorParseError) as exc:
@@ -380,7 +404,7 @@ class Controller:
             sample = None
         else:
             sample = self.last_sample
-        decision = policy.decide(sample)
+        decision = policy.decide(sample, power_on=power_on)
         self.apply(decision, client=client, dry_run=dry_run)
         return decision
 
@@ -512,6 +536,7 @@ def parse_config(
     na_grace = _integer(data.get("na_grace", 2), "na_grace")
     fallback = _speed(data.get("fallback_speed", 100), "fallback_speed")
     min_speed_on = _speed(data.get("min_speed_on", 10), "min_speed_on")
+    boot_speed = _speed(data.get("boot_speed", 20), "boot_speed")
     if interval <= 0:
         raise ConfigError("interval 必须大于 0")
     if hysteresis < 0:
@@ -522,6 +547,8 @@ def parse_config(
         raise ConfigError("na_grace 不能为负")
     if min_speed_on > fallback:
         raise ConfigError("min_speed_on 不能高于 fallback_speed")
+    if boot_speed > fallback:
+        raise ConfigError("boot_speed 不能高于 fallback_speed")
     if "exit_speed" not in data:
         exit_speed: int | None = 100
     elif data["exit_speed"] is None:
@@ -544,6 +571,7 @@ def parse_config(
         hysteresis=hysteresis,
         fallback_speed=fallback,
         min_speed_on=min_speed_on,
+        boot_speed=boot_speed,
         exit_speed=exit_speed,
         sensor_pattern=pattern,
         command_timeout=timeout,
@@ -657,6 +685,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.fallback_speed,
         config.min_speed_on,
         config.na_grace,
+        config.boot_speed,
     )
     controller = Controller(
         policy=policy,

@@ -32,6 +32,7 @@ from ipmi_manager import (
     load_config,
     parse_config,
     cpu_temperature_sample,
+    chassis_power_on,
     default_config_path,
 )
 
@@ -155,6 +156,7 @@ class Console:
                 config.fallback_speed,
                 config.min_speed_on,
                 config.na_grace,
+                config.boot_speed,
             ),
             client=self.client,
             sensor_pattern=config.sensor_pattern,
@@ -237,6 +239,7 @@ class Console:
                 config.fallback_speed,
                 config.min_speed_on,
                 config.na_grace,
+                config.boot_speed,
             )
             self.controller.pattern = self.pattern
             self.controller.exit_speed = config.exit_speed
@@ -275,6 +278,7 @@ class Console:
             "hysteresis": payload.get("hysteresis", config.hysteresis),
             "fallback_speed": payload.get("fallback_speed", config.fallback_speed),
             "min_speed_on": payload.get("min_speed_on", config.min_speed_on),
+            "boot_speed": config.boot_speed,
             "exit_speed": exit_speed,
             "na_grace": config.na_grace,
             "command_timeout": config.command_timeout,
@@ -303,7 +307,9 @@ class Console:
             client = self.client
             pattern = self.pattern
         try:
-            sample = cpu_temperature_sample(client.read_sensors(), pattern)
+            text = client.read_sensors()
+            sample = cpu_temperature_sample(text, pattern)
+            power_on = chassis_power_on(client)
         except (IpmiError, SensorParseError) as exc:
             with self.lock:
                 self.sample = None
@@ -313,8 +319,10 @@ class Console:
         with self.lock:
             self.sample = sample
             self.error = None
-        if sample.temp is None:
-            self.add_log("info", "CPU 温度无效")
+        if sample.temp is None and power_on is False:
+            self.add_log("info", "主机关机")
+        elif sample.temp is None:
+            self.add_log("info", "开机中，CPU 温度还读不到")
         elif sample.readings:
             detail = "，".join(f"{name} {temp:.1f}°C" for name, temp in sample.readings)
             self.add_log("info", detail)

@@ -88,7 +88,7 @@ ipmitool -I lanplus -H "$BMC_HOST" -U "$BMC_USER" -E raw 0x2e 0x30 0x00 0x00 100
 
 0–5°C 那档只在判定关机后使用。有有效温度时，转速不低于 `min_speed_on`（默认 10%）。
 
-传感器命令失败时写入 `fallback_speed`（默认 100%）。机器已经在线后，CPU 温度连续 `na_grace` 次全是 `na`，这几轮维持高转速，之后才走关机档。
+传感器命令失败，或主机已开机但还没有 CPU DTS 时，使用 `boot_speed`（默认 20%）。SEL 里从进入 S0 到认出内存大约 90 秒，这段时间温度是空的。已经按温度调过之后又读不到，就保持上一次转速，不拉到 100%。主机关机且没有温度时，才走 0–5°C 那一档。温度超过曲线上限时才用 `fallback_speed`。
 
 分档来自 [Vision0220/HR650X-IPMI-Auto-Fan](https://github.com/Vision0220/HR650X-IPMI-Auto-Fan)。先用 `--dry-run --once` 确认读得到 `CPU1_DTS`，再让它写转速。
 

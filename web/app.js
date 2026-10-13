@@ -319,11 +319,14 @@ function render(next, form) {
   if (state.error) lamp.classList.add("is-fault");
   else if (state.running) lamp.classList.add("is-on");
   if (state.demo) lamp.classList.add("is-demo");
+  const booting = state.decision && String(state.decision.reason).startsWith("开机中");
   document.getElementById("status-label").textContent = state.error
     ? "读取失败"
-    : state.running
-      ? "自动"
-      : "待命";
+    : booting
+      ? "开机"
+      : state.running
+        ? "自动"
+        : "待命";
   document.getElementById("target").textContent = state.demo
     ? "模拟"
     : state.config.interface === "open"
@@ -335,9 +338,9 @@ function render(next, form) {
   const caption = document.getElementById("caption");
   caption.classList.toggle("is-fault", Boolean(state.error));
   if (state.error) caption.textContent = state.error;
-  else if (!state.sample) caption.textContent = "读取后显示在曲线上。";
-  else if (!state.sample.valid) caption.textContent = "CPU 温度无效";
-  else if (state.sample.readings && state.sample.readings.length) {
+  else if (!state.sample || !state.sample.valid) {
+    caption.textContent = (state.decision && state.decision.reason) || "CPU 温度还读不到";
+  } else if (state.sample.readings && state.sample.readings.length) {
     caption.textContent = state.sample.readings
       .map((item) => `${item.name} ${Number(item.temp).toFixed(1)}°C`)
       .join("  ");

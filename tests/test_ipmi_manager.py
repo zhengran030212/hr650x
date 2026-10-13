@@ -93,6 +93,19 @@ CPU1_VR_Temp     | 36.000     | degrees C  | ok
         self.assertEqual(sample.valid, 1)
         self.assertEqual(sample.readings, (("CPU1_DTS", 65.0),))
 
+    def test_unavailable_dts_is_not_replaced_by_package_temp(self):
+        text = """
+CPU1_Temp | 37.000 | degrees C | ok
+CPU1_DTS | na | degrees C | na
+CPU2_DTS | 0.000 | degrees C | ok
+"""
+        from ipmi_manager import cpu_temperature_sample
+
+        sample = cpu_temperature_sample(text, PATTERN)
+        self.assertIsNone(sample.temp)
+        self.assertEqual(sample.valid, 0)
+        self.assertEqual(sample.matched, 2)
+
     def test_uses_reading_column_and_ignores_thresholds_and_vrd(self):
         sample = parse_sensor_output(SENSORS, PATTERN)
         self.assertEqual(sample, Sample(temp=46.0, matched=2, valid=2))
@@ -154,28 +167,37 @@ class FanPolicyTest(unittest.TestCase):
         self.assertEqual(fan.decide(online(99)).speed, 100)
         self.assertEqual(fan.decide(online(97)).speed, 80)
 
-    def test_initial_na_uses_off_speed(self):
+    def test_initial_na_while_off_uses_off_speed(self):
         fan = policy()
-        decision = fan.decide(offline())
+        decision = fan.decide(offline(), power_on=False)
         self.assertEqual(decision.speed, 2)
-        self.assertEqual(fan.decide(online(46)).speed, 20)
+        self.assertEqual(fan.decide(online(46), power_on=True).speed, 20)
 
-    def test_na_after_online_holds_high_then_accepts_poweroff(self):
+    def test_boot_without_temperature_holds_boot_speed(self):
         fan = policy()
-        fan.decide(online(46))
-        self.assertEqual(fan.decide(offline()).speed, 100)
-        self.assertEqual(fan.decide(offline()).speed, 100)
-        self.assertEqual(fan.decide(offline()).speed, 2)
+        first = fan.decide(offline(), power_on=True)
+        second = fan.decide(None, power_on=True)
+        self.assertEqual(first.speed, 20)
+        self.assertEqual(second.speed, 20)
+        self.assertIn("开机中", first.reason)
 
-    def test_zero_grace_accepts_poweroff_immediately(self):
-        fan = policy(na_grace=0)
-        fan.decide(online(46))
-        self.assertEqual(fan.decide(offline()).speed, 2)
-
-    def test_read_failure_uses_fallback(self):
+    def test_missing_temperature_after_online_keeps_the_last_speed(self):
         fan = policy()
-        fan.decide(online(46))
-        self.assertEqual(fan.decide(None).speed, 100)
+        self.assertEqual(fan.decide(online(70), power_on=True).speed, 80)
+        self.assertEqual(fan.decide(offline(), power_on=True).speed, 80)
+        self.assertEqual(fan.decide(None, power_on=True).speed, 80)
+
+    def test_power_off_drops_to_the_off_band(self):
+        fan = policy()
+        fan.decide(online(70), power_on=True)
+        self.assertEqual(fan.decide(offline(), power_on=False).speed, 2)
+        self.assertEqual(fan.decide(offline(), power_on=True).speed, 20)
+
+    def test_read_failure_does_not_ramp_to_full_speed(self):
+        fan = policy()
+        fan.decide(online(46), power_on=True)
+        decision = fan.decide(None, power_on=None)
+        self.assertEqual(decision.speed, 20)
 
 
 class CommandTest(unittest.TestCase):
@@ -188,6 +210,13 @@ class CommandTest(unittest.TestCase):
         )
         self.assertNotIn("s'ecret", args)
         self.assertEqual(ipmi_env(target, {})["IPMI_PASSWORD"], "s'ecret")
+
+    def test_chassis_power_status(self):
+        from ipmi_manager import parse_chassis_power
+
+        self.assertTrue(parse_chassis_power("Chassis Power is on\n"))
+        self.assertFalse(parse_chassis_power("Chassis Power is off\n"))
+        self.assertIsNone(parse_chassis_power("error"))
 
     def test_local_interface_has_no_credentials(self):
         args = build_ipmi_args(IpmiTarget("open"), ["sensor"])
@@ -277,6 +306,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.bands[0].speed, 2)
         self.assertEqual(config.min_speed_on, 10)
         self.assertEqual(config.exit_speed, 20)
+        self.assertEqual(config.boot_speed, 20)
 
 
 class FakeClient:
@@ -346,13 +376,13 @@ class ControllerTest(unittest.TestCase):
         fan.step()
         self.assertEqual(client.sets, [20])
 
-    def test_sensor_failure_sets_fallback(self):
+    def test_sensor_failure_while_running_keeps_the_current_speed(self):
         client = FakeClient([SENSORS, IpmiError("timeout")])
         fan = controller(client)
         fan.step()
         decision = fan.step()
-        self.assertEqual(decision, Decision(100, "传感器读取失败，回退高转速"))
-        self.assertEqual(client.sets, [20, 100])
+        self.assertEqual(decision.speed, 20)
+        self.assertEqual(client.sets, [20])
 
 
 if __name__ == "__main__":

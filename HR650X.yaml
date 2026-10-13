@@ -17,8 +17,8 @@ fallback_speed: 100
 min_speed_on: 10
 # 停止自动时写回的转速。100 会很吵，可改成 20，或 null 保持当前转速。
 exit_speed: 20
-# 机器在线后，连续这么多次 CPU 温度全为 na，才按关机降速。
-na_grace: 2
+# 开机后 DTS 还读不到的这段时间保持这个转速，不降到关机档，也不拉满。
+boot_speed: 20
 command_timeout: 20
 # 没有 CPU DTS 时才用这个表达式。这台 BMC 的内核温度是 CPU1_DTS。
 sensor_pattern: "^CPU[0-9]+[_ ]Temp$"
