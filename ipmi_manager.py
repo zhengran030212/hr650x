@@ -68,7 +68,7 @@ class Sample:
     readings: tuple[tuple[str, float], ...] = ()
 
 
-_CPU_DTS = re.compile(r"^CPU\d+[_ ]DTS$", re.IGNORECASE)
+_CPU_SURFACE = re.compile(r"^CPU\d+[_ ]Temp$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -196,13 +196,13 @@ def _temperature_value(reading: str) -> float | None:
 
 
 def cpu_temperature_sample(text: str, fallback: re.Pattern[str]) -> Sample:
-    """优先用 CPU DTS。没有 DTS 时再用配置里的传感器表达式。"""
+    """只用 CPU 表面温度。DTS 不参与。"""
     found: list[tuple[str, float | None]] = []
     for raw in text.splitlines():
         if "|" not in raw:
             continue
         columns = [part.strip() for part in raw.split("|")]
-        if len(columns) < 2 or not columns[0] or _CPU_DTS.search(columns[0]) is None:
+        if len(columns) < 2 or not columns[0] or _CPU_SURFACE.search(columns[0]) is None:
             continue
         try:
             found.append((columns[0], _temperature_value(columns[1])))
@@ -217,6 +217,56 @@ def cpu_temperature_sample(text: str, fallback: re.Pattern[str]) -> Sample:
             readings=present,
         )
     return parse_sensor_output(text, fallback)
+
+
+_RELATED = re.compile(
+    r"^(?:CPU\d+_Temp|CPU\d+_VR_Temp|(?:Inlet|Outlet|PCH)_Temp|DIMMG\d+_Temp|PSU\d+_Temp|FAN\d+_[FR]_Speed)$",
+    re.IGNORECASE,
+)
+
+
+def parse_related_sensors(text: str) -> tuple[tuple[str, float | None, str], ...]:
+    """风扇相关的温度和转速。0 保留，用来区分空槽位和没读到。"""
+    rows: list[tuple[str, float | None, str]] = []
+    for raw in text.splitlines():
+        if "|" not in raw:
+            continue
+        columns = [part.strip() for part in raw.split("|")]
+        if len(columns) < 2 or _RELATED.match(columns[0]) is None:
+            continue
+        name, reading = columns[0], columns[1]
+        unit = "RPM" if name.lower().endswith("_speed") else "°C"
+        token = reading.lower()
+        if token in {"", "na", "n/a", "disabled"}:
+            rows.append((name, None, unit))
+            continue
+        try:
+            rows.append((name, float(reading), unit))
+        except ValueError as exc:
+            raise SensorParseError(f"传感器 {name} 的读数无法解析：{reading}") from exc
+    return tuple(rows)
+
+
+def parse_fan_duty(text: str) -> tuple[int, ...]:
+    values: list[int] = []
+    for part in text.split():
+        try:
+            values.append(int(part, 16))
+        except ValueError:
+            continue
+    if values and values[0] > 100:
+        values = values[1:]
+    return tuple(value for value in values if 0 <= value <= 100)
+
+
+def fan_duty_of(client: SensorClient) -> tuple[int, ...] | None:
+    method = getattr(client, "read_fan_duty", None)
+    if method is None:
+        return None
+    try:
+        return tuple(method())
+    except IpmiError:
+        return None
 
 
 class FanPolicy:
@@ -339,6 +389,25 @@ def default_runner(args: Sequence[str], env: Mapping[str, str], timeout: float) 
     return proc.stdout
 
 
+THERMAL_SENSORS = (
+    "CPU1_Temp",
+    "CPU2_Temp",
+    "Inlet_Temp",
+    "Outlet_Temp",
+    "PCH_Temp",
+    "CPU1_VR_Temp",
+    "CPU2_VR_Temp",
+    "DIMMG1_Temp",
+    "DIMMG2_Temp",
+    "PSU1_Temp",
+    "PSU2_Temp",
+    "FAN1_R_Speed",
+    "FAN2_R_Speed",
+    "FAN3_R_Speed",
+    "FAN4_R_Speed",
+)
+
+
 class IpmiClient:
     def __init__(
         self,
@@ -353,7 +422,8 @@ class IpmiClient:
         self.environ = os.environ if environ is None else environ
 
     def read_sensors(self) -> str:
-        return self._run(("sensor",))
+        # 全表 sensor 在这台 BMC 上经常超过 20 秒。只读温度和在转的风扇。
+        return self._run(("sensor", "reading", *THERMAL_SENSORS))
 
     def set_speed(self, speed: int) -> None:
         duty = format_duty(speed)
@@ -361,6 +431,9 @@ class IpmiClient:
 
     def chassis_power_on(self) -> bool | None:
         return parse_chassis_power(self._run(("chassis", "power", "status")))
+
+    def read_fan_duty(self) -> tuple[int, ...]:
+        return parse_fan_duty(self._run(("raw", "0x2e", "0x31")))
 
     def _run(self, command: Sequence[str]) -> str:
         args = build_ipmi_args(self.target, command)
@@ -387,6 +460,9 @@ class Controller:
         self.last_speed: int | None = None
         self.last_sample: Sample | None = None
         self.last_error: str | None = None
+        self.last_power: bool | None = None
+        self.last_sensors: tuple[tuple[str, float | None, str], ...] = ()
+        self.last_fan_duty: tuple[int, ...] = ()
 
     def step(self) -> Decision:
         client = self.client
@@ -395,8 +471,14 @@ class Controller:
         dry_run = self.dry_run
         self.last_error = None
         power_on = chassis_power_on(client)
+        self.last_power = power_on
+        duty = fan_duty_of(client)
+        if duty is not None:
+            self.last_fan_duty = duty
         try:
-            self.last_sample = cpu_temperature_sample(client.read_sensors(), pattern)
+            text = client.read_sensors()
+            self.last_sample = cpu_temperature_sample(text, pattern)
+            self.last_sensors = parse_related_sensors(text)
         except (IpmiError, SensorParseError) as exc:
             self.last_sample = None
             self.last_error = str(exc)

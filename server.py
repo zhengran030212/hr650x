@@ -33,6 +33,8 @@ from ipmi_manager import (
     parse_config,
     cpu_temperature_sample,
     chassis_power_on,
+    parse_related_sensors,
+    fan_duty_of,
     default_config_path,
 )
 
@@ -60,11 +62,23 @@ class DemoClient:
         return (
             f"CPU1 Temp | {temp:.3f} | degrees C | ok | na | na | na | na | 95.000 | na\n"
             f"CPU2 Temp | {temp - 2.4:.3f} | degrees C | ok | na | na | na | na | 95.000 | na\n"
-            "CPU1 VRD Temp | 71.000 | degrees C | ok | na | na | na | na | na | na\n"
+            f"Inlet_Temp | 26.000 | degrees C | ok\n"
+            f"Outlet_Temp | {temp - 8:.3f} | degrees C | ok\n"
+            f"PCH_Temp | 44.000 | degrees C | ok\n"
+            f"FAN1_F_Speed | 3200.000 | RPM | ok\n"
+            f"FAN1_R_Speed | 3100.000 | RPM | ok\n"
         )
 
     def set_speed(self, speed: int) -> None:
         self.duty = int(speed)
+
+    def chassis_power_on(self) -> bool:
+        return True
+
+    def read_fan_duty(self) -> tuple[int, ...]:
+        if self.duty is None:
+            return ()
+        return (self.duty, self.duty)
 
 
 class RingHandler(logging.Handler):
@@ -132,10 +146,16 @@ class Console:
         self.client: Any = DemoClient() if demo else self._real_client()
         self.controller = self._make_controller()
         self.lock = threading.Lock()
+        self.ipmi_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.watch_stop = threading.Event()
+        self.watch_thread: threading.Thread | None = None
         self.running = False
         self.sample = None
+        self.sensors: tuple[tuple[str, float | None, str], ...] = ()
+        self.power_on: bool | None = None
+        self.fan_duty: tuple[int, ...] = ()
         self.decision = None
         self.duty: int | None = None
         self.error: str | None = None
@@ -182,6 +202,12 @@ class Console:
                 "ipmitool": shutil.which("ipmitool") is not None,
                 "duty": self.duty,
                 "error": self.error,
+                "power_on": self.power_on,
+                "fan_duty": list(self.fan_duty),
+                "sensors": [
+                    {"name": name, "value": value, "unit": unit}
+                    for name, value, unit in self.sensors
+                ],
                 "sample": None
                 if sample is None
                 else {
@@ -307,9 +333,12 @@ class Console:
             client = self.client
             pattern = self.pattern
         try:
-            text = client.read_sensors()
-            sample = cpu_temperature_sample(text, pattern)
-            power_on = chassis_power_on(client)
+            with self.ipmi_lock:
+                text = client.read_sensors()
+                sample = cpu_temperature_sample(text, pattern)
+                sensors = parse_related_sensors(text)
+                power_on = chassis_power_on(client)
+                duty = fan_duty_of(client)
         except (IpmiError, SensorParseError) as exc:
             with self.lock:
                 self.sample = None
@@ -318,6 +347,10 @@ class Console:
             raise ConsoleError(str(exc)) from exc
         with self.lock:
             self.sample = sample
+            self.sensors = sensors
+            self.power_on = power_on
+            if duty:
+                self.fan_duty = duty
             self.error = None
         if sample.temp is None and power_on is False:
             self.add_log("info", "主机关机")
@@ -377,6 +410,59 @@ class Console:
             self.duty = controller.last_speed
         self.add_log("info", "已停止")
 
+    def start_watch(self) -> None:
+        self.watch_stop.clear()
+        self.watch_thread = threading.Thread(target=self._watch, name="hr650x-watch", daemon=True)
+        self.watch_thread.start()
+
+    def stop_watch(self) -> None:
+        self.watch_stop.set()
+        thread = self.watch_thread
+        if thread is not None:
+            thread.join(timeout=2)
+
+    def _watch(self) -> None:
+        while not self.watch_stop.is_set():
+            if not self.running:
+                try:
+                    self._refresh()
+                except Exception as exc:
+                    self.add_log("error", f"读取传感器失败：{exc}")
+            with self.lock:
+                interval = max(float(self.config.interval), 5)
+            if self.watch_stop.wait(interval):
+                break
+
+    def _refresh(self) -> None:
+        with self.ipmi_lock:
+            if self.running:
+                return
+            with self.lock:
+                client = self.client
+                pattern = self.pattern
+            try:
+                text = client.read_sensors()
+                sample = cpu_temperature_sample(text, pattern)
+                sensors = parse_related_sensors(text)
+                error = None
+            except (IpmiError, SensorParseError) as exc:
+                sample = None
+                sensors = ()
+                error = str(exc)
+            power_on = chassis_power_on(client)
+            duty = fan_duty_of(client)
+        with self.lock:
+            self.power_on = power_on
+            if duty:
+                self.fan_duty = duty
+            if error:
+                self.error = error
+                self.sample = None
+            else:
+                self.error = None
+                self.sample = sample
+                self.sensors = sensors
+
     def _loop(self) -> None:
         controller = self.controller
         try:
@@ -385,7 +471,8 @@ class Console:
                     controller = self.controller
                     interval = self.config.interval
                 try:
-                    decision = controller.step()
+                    with self.ipmi_lock:
+                        decision = controller.step()
                 except IpmiError as exc:
                     with self.lock:
                         self.error = str(exc)
@@ -393,6 +480,10 @@ class Console:
                 else:
                     with self.lock:
                         self.sample = controller.last_sample
+                        self.sensors = controller.last_sensors
+                        self.power_on = controller.last_power
+                        if controller.last_fan_duty:
+                            self.fan_duty = controller.last_fan_duty
                         self.decision = decision
                         self.duty = controller.last_speed
                         self.error = controller.last_error
@@ -502,6 +593,7 @@ def make_handler(console: Console):
 
 def serve(config_path: Path, host: str, port: int, demo: bool, open_browser: bool) -> None:
     console = Console(config_path, demo=demo)
+    console.start_watch()
     httpd = AppServer((host, port), make_handler(console))
     url = f"http://{host}:{httpd.server_address[1]}/"
 
@@ -516,6 +608,7 @@ def serve(config_path: Path, host: str, port: int, demo: bool, open_browser: boo
     try:
         httpd.serve_forever()
     finally:
+        console.stop_watch()
         console.stop_auto()
         httpd.server_close()
 

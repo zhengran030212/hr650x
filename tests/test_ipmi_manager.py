@@ -78,7 +78,7 @@ def minimal_config(**overrides):
 
 
 class ParseSensorTest(unittest.TestCase):
-    def test_dts_is_the_cpu_temperature_and_empty_socket_is_ignored(self):
+    def test_surface_temperature_ignores_dts(self):
         text = """
 CPU1_Temp        | 37.000     | degrees C  | ok
 CPU2_Temp        | 0.000      | degrees C  | ok
@@ -89,11 +89,11 @@ CPU1_VR_Temp     | 36.000     | degrees C  | ok
         from ipmi_manager import cpu_temperature_sample
 
         sample = cpu_temperature_sample(text, PATTERN)
-        self.assertEqual(sample.temp, 65.0)
+        self.assertEqual(sample.temp, 37.0)
         self.assertEqual(sample.valid, 1)
-        self.assertEqual(sample.readings, (("CPU1_DTS", 65.0),))
+        self.assertEqual(sample.readings, (("CPU1_Temp", 37.0),))
 
-    def test_unavailable_dts_is_not_replaced_by_package_temp(self):
+    def test_surface_temperature_is_used_when_dts_is_missing(self):
         text = """
 CPU1_Temp | 37.000 | degrees C | ok
 CPU1_DTS | na | degrees C | na
@@ -102,9 +102,28 @@ CPU2_DTS | 0.000 | degrees C | ok
         from ipmi_manager import cpu_temperature_sample
 
         sample = cpu_temperature_sample(text, PATTERN)
-        self.assertIsNone(sample.temp)
-        self.assertEqual(sample.valid, 0)
-        self.assertEqual(sample.matched, 2)
+        self.assertEqual(sample.temp, 37.0)
+        self.assertEqual(sample.valid, 1)
+        self.assertEqual(sample.matched, 1)
+
+    def test_related_sensors_and_fan_duty(self):
+        from ipmi_manager import parse_fan_duty, parse_related_sensors
+
+        text = """
+CPU1_Temp | 35.000 | degrees C | ok
+Inlet_Temp | 26.000 | degrees C | ok
+FAN1_F_Speed | na | RPM | na
+FAN1_R_Speed | 2800.000 | RPM | ok
+CPU1_VCCIN | 1.780 | Volts | ok
+"""
+        sensors = dict((name, value) for name, value, _unit in parse_related_sensors(text))
+        self.assertEqual(sensors["CPU1_Temp"], 35.0)
+        self.assertNotIn("CPU1_DTS", sensors)
+        self.assertEqual(sensors["Inlet_Temp"], 26.0)
+        self.assertIsNone(sensors["FAN1_F_Speed"])
+        self.assertEqual(sensors["FAN1_R_Speed"], 2800.0)
+        self.assertNotIn("CPU1_VCCIN", sensors)
+        self.assertEqual(parse_fan_duty("fb 14 1e 3c"), (20, 30, 60))
 
     def test_uses_reading_column_and_ignores_thresholds_and_vrd(self):
         sample = parse_sensor_output(SENSORS, PATTERN)

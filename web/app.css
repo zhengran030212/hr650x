@@ -245,7 +245,29 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 .check input { width: auto; }
 
-.meter { background: var(--inset); }
+.sensors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 10px 12px;
+  margin: 0;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sensors div { margin: 0; }
+
+.sensors dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sensors dd {
+  margin: 0;
+  font-family: var(--gauge);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+}
 
 #curve { width: 100%; height: auto; display: block; }
 
@@ -324,7 +346,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   .shell { margin: 0; border-left: 0; border-right: 0; }
   .face { grid-template-columns: 1fr; gap: 20px; }
   .gauge-temp { font-size: 88px; }
-  .top, .face, .meter, .log { padding: 16px; }
+  .top, .face, .meter, .log, .sensors { padding: 16px; }
   .bands { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 }
 

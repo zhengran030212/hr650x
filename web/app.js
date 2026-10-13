@@ -50,8 +50,63 @@ function editing() {
   return Boolean(node && node.closest && node.closest("[data-edit]"));
 }
 
+function sensorLabel(name) {
+  const fixed = {
+    Inlet_Temp: "进风",
+    Outlet_Temp: "出风",
+    PCH_Temp: "PCH",
+  };
+  if (fixed[name]) return fixed[name];
+  const patterns = [
+    [/^CPU(\d+)_DTS$/i, (m) => `CPU${m[1]}`],
+    [/^CPU(\d+)_Temp$/i, (m) => `CPU${m[1]} 表面`],
+    [/^CPU(\d+)_VR_Temp$/i, (m) => `VR${m[1]}`],
+    [/^DIMMG(\d+)_Temp$/i, (m) => `内存${m[1]}`],
+    [/^PSU(\d+)_Temp$/i, (m) => `电源${m[1]}`],
+    [/^FAN(\d+)_F_Speed$/i, (m) => `风扇${m[1]}前`],
+    [/^FAN(\d+)_R_Speed$/i, (m) => `风扇${m[1]}后`],
+  ];
+  for (const [pattern, label] of patterns) {
+    const match = name.match(pattern);
+    if (match) return label(match);
+  }
+  return name;
+}
+
+function formatSensor(item) {
+  if (item.value == null || Number.isNaN(Number(item.value))) return "—";
+  if (item.unit === "RPM") return String(Math.round(item.value));
+  return Number(item.value).toFixed(0);
+}
+
+function formatDuty(list) {
+  if (!list || !list.length) return "—";
+  const min = Math.min(...list);
+  const max = Math.max(...list);
+  return min === max ? `${min}%` : `${min}–${max}%`;
+}
+
 function formatTemp(value) {
   return value == null || Number.isNaN(value) ? "—" : Number(value).toFixed(1);
+}
+
+function renderSensors() {
+  const root = document.getElementById("sensors");
+  const items = state.sensors || [];
+  root.hidden = items.length === 0;
+  const key = JSON.stringify(items);
+  if (root.dataset.key === key) return;
+  root.dataset.key = key;
+  root.replaceChildren();
+  for (const item of items) {
+    const wrap = document.createElement("div");
+    const label = document.createElement("dt");
+    label.textContent = sensorLabel(item.name);
+    const value = document.createElement("dd");
+    value.textContent = formatSensor(item);
+    wrap.append(label, value);
+    root.append(wrap);
+  }
 }
 
 function percent(value) {
@@ -320,6 +375,7 @@ function render(next, form) {
   else if (state.running) lamp.classList.add("is-on");
   if (state.demo) lamp.classList.add("is-demo");
   const booting = state.decision && String(state.decision.reason).startsWith("开机中");
+  const power = state.power_on === true ? "开机" : state.power_on === false ? "关机" : "";
   document.getElementById("status-label").textContent = state.error
     ? "读取失败"
     : booting
@@ -327,11 +383,12 @@ function render(next, form) {
       : state.running
         ? "自动"
         : "待命";
-  document.getElementById("target").textContent = state.demo
+  const place = state.demo
     ? "模拟"
     : state.config.interface === "open"
       ? "本机"
       : (state.config.host || "未填地址");
+  document.getElementById("target").textContent = power && !state.demo ? `${power} · ${place}` : place;
 
   const temp = state.sample ? state.sample.temp : null;
   document.getElementById("temp").textContent = formatTemp(temp);
@@ -339,10 +396,11 @@ function render(next, form) {
   caption.classList.toggle("is-fault", Boolean(state.error));
   if (state.error) caption.textContent = state.error;
   else if (!state.sample || !state.sample.valid) {
-    caption.textContent = (state.decision && state.decision.reason) || "CPU 温度还读不到";
+    if (state.power_on === false) caption.textContent = "主机关机";
+    else caption.textContent = (state.decision && state.decision.reason) || "CPU 温度还读不到";
   } else if (state.sample.readings && state.sample.readings.length) {
     caption.textContent = state.sample.readings
-      .map((item) => `${item.name} ${Number(item.temp).toFixed(1)}°C`)
+      .map((item) => `${sensorLabel(item.name)} ${Number(item.temp).toFixed(1)}°C`)
       .join("  ");
   } else caption.textContent = `${state.sample.valid} 个 CPU 有读数`;
 
@@ -356,6 +414,8 @@ function render(next, form) {
   }
   document.getElementById("curve-duty").textContent = percent(predicted(temp, bands));
   document.getElementById("written-duty").textContent = percent(state.duty);
+  document.getElementById("bmc-duty").textContent = formatDuty(state.fan_duty);
+  renderSensors();
   document.getElementById("dirty-note").hidden = !dirty;
 
   const slider = document.getElementById("manual");

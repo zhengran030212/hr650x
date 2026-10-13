@@ -1,6 +1,6 @@
 # HR650X 风扇调节
 
-用 IPMI 调节联想 ThinkSystem HR650X / HR630X 的风扇占空比。温度优先读 `CPU1_DTS`。没有 DTS 时，再按配置里的传感器名匹配。
+用 IPMI 调节联想 ThinkSystem HR650X / HR630X 的风扇占空比。温度用 CPU 表面传感器 `CPU1_Temp`，不用 DTS。
 
 命令是 BMC 的 OEM 原始命令：
 
@@ -66,11 +66,10 @@ ipmitool -I lanplus -H "$BMC_HOST" -U "$BMC_USER" -E raw 0x2e 0x30 0x00 0x00 100
 
 | 传感器 | 含义 |
 | --- | --- |
-| `CPU1_DTS` | CPU 数字温度传感器，调节用这个 |
-| `CPU1_Temp` | 另一路温度，通常低于 DTS |
-| `CPU2_DTS` 为 0 | 该槽位没有 CPU，忽略 |
+| `CPU1_Temp` | CPU 表面温度，调节用这个 |
+| `CPU2_Temp` 为 0 | 该槽位没有 CPU，忽略 |
 
-程序见到 `CPUx_DTS` 就只用 DTS。读数为 0 的槽位不算有效温度。
+程序只认 `CPUx_Temp`。读数为 0 的槽位不算有效温度。
 
 ## 转速
 
@@ -79,18 +78,20 @@ ipmitool -I lanplus -H "$BMC_HOST" -U "$BMC_USER" -E raw 0x2e 0x30 0x00 0x00 100
 | CPU 温度 | 风扇 |
 | --- | --- |
 | 0–5°C | 2% |
-| 5–40°C | 10% |
-| 40–45°C | 14% |
-| 45–50°C | 20% |
-| 50–60°C | 50% |
-| 60–80°C | 80% |
-| 80–100°C | 100% |
+| 5–45°C | 20% |
+| 45–55°C | 30% |
+| 55–65°C | 40% |
+| 65–75°C | 55% |
+| 75–85°C | 70% |
+| 85–100°C | 100% |
+
+这套分档按表面温度 `CPU1_Temp` 来定。这台机器轻载时表面大约 35°C，DTS 会高出三十多度，不拿来调节。
 
 0–5°C 那档只在判定关机后使用。有有效温度时，转速不低于 `min_speed_on`（默认 10%）。
 
-传感器命令失败，或主机已开机但还没有 CPU DTS 时，使用 `boot_speed`（默认 20%）。SEL 里从进入 S0 到认出内存大约 90 秒，这段时间温度是空的。已经按温度调过之后又读不到，就保持上一次转速，不拉到 100%。主机关机且没有温度时，才走 0–5°C 那一档。温度超过曲线上限时才用 `fallback_speed`。
+传感器命令失败，或主机已开机但表面温度还没有读数时，使用 `boot_speed`（默认 20%）。SEL 里从进入 S0 到认出内存大约 90 秒，这段时间温度是空的。已经按温度调过之后又读不到，就保持上一次转速，不拉到 100%。主机关机且没有温度时，才走 0–5°C 那一档。温度超过曲线上限时才用 `fallback_speed`。
 
-分档来自 [Vision0220/HR650X-IPMI-Auto-Fan](https://github.com/Vision0220/HR650X-IPMI-Auto-Fan)。先用 `--dry-run --once` 确认读得到 `CPU1_DTS`，再让它写转速。
+分档来自 [Vision0220/HR650X-IPMI-Auto-Fan](https://github.com/Vision0220/HR650X-IPMI-Auto-Fan)。先用 `--dry-run --once` 确认读得到 `CPU1_Temp`，再让它写转速。
 
 ## systemd
 
