@@ -444,6 +444,7 @@ document.querySelector(".policy").addEventListener("input", () => {
   stopHint();
   markDirty();
 });
+document.querySelector(".link").addEventListener("input", markDirty);
 document.getElementById("iface").addEventListener("change", syncIface);
 document.getElementById("add-band").addEventListener("click", addBand);
 
