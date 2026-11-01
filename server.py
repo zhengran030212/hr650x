@@ -12,7 +12,10 @@ import shutil
 import signal
 import threading
 import time
-import webbrowser
+try:
+    import webbrowser
+except ModuleNotFoundError:  # OpenWrt python3-light 没有 webbrowser
+    webbrowser = None
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -511,7 +514,7 @@ def serve(config_path: Path, host: str, port: int, demo: bool, open_browser: boo
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     print(url, flush=True)
-    if open_browser:
+    if open_browser and webbrowser is not None:
         webbrowser.open(url)
     try:
         httpd.serve_forever()

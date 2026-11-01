@@ -1,0 +1,30 @@
+<%+header%>
+<style>
+.hr650x-wrap{margin:0;padding:0}
+.hr650x-frame{width:100%;min-height:78vh;border:0;display:block}
+.hr650x-bar{padding:8px 0}
+</style>
+<div class="hr650x-wrap">
+  <div class="hr650x-bar">
+    <a id="hr650x-open" class="cbi-button" href="#" target="_blank">新窗口打开</a>
+    <span id="hr650x-status" style="margin-left:12px"></span>
+  </div>
+  <iframe id="hr650x-frame" class="hr650x-frame" src="about:blank"></iframe>
+</div>
+<script>
+(function(){
+  var port = 8765;
+  var url = location.protocol + "//" + location.hostname + ":" + port + "/";
+  var f = document.getElementById("hr650x-frame");
+  var a = document.getElementById("hr650x-open");
+  var s = document.getElementById("hr650x-status");
+  a.href = url;
+  f.src = url;
+  f.onerror = function(){ s.textContent = "界面加载失败，请确认 hr650x 服务已启动（端口 " + port + "）。"; };
+  f.onload = function(){ s.textContent = ""; };
+  setTimeout(function(){
+    try { var x = new XMLHttpRequest(); x.open("GET", url.replace(/\/$/,"") + "/api/state", true); x.onerror = function(){ s.textContent = "无法连接 hr650x 服务（:" + port + "）"; }; x.send(); } catch(e){}
+  }, 300);
+})();
+</script>
+<%+footer%>
