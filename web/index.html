@@ -101,6 +101,14 @@
         <label>停止后
           <span class="field"><input id="exit-speed" inputmode="numeric" value="100"><span>%</span></span>
         </label>
+        <label>温度源
+          <span class="field">
+            <select id="use-dts">
+              <option value="true">内核 DTS</option>
+              <option value="false">外壳 Temp</option>
+            </select>
+          </span>
+        </label>
         <button id="save-btn" type="button">保存曲线</button>
       </div>
       <div id="bands" class="bands" data-edit></div>

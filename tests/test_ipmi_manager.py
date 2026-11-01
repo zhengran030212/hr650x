@@ -15,6 +15,7 @@ from ipmi_manager import (
     IpmiTarget,
     Sample,
     build_ipmi_args,
+    cpu_temperature_sample,
     format_duty,
     ipmi_env,
     load_config,
@@ -387,3 +388,29 @@ class ControllerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreferTempSensorTest(unittest.TestCase):
+    TEXT = """
+CPU1 Temp        | 37.000     | degrees C  | ok
+CPU2 Temp        | 0.000      | degrees C  | ok
+CPU1_DTS         | 65.000     | degrees C  | ok
+CPU2_DTS         | 0.000      | degrees C  | ok
+"""
+
+    def test_prefer_dts_uses_dts(self):
+        sample = cpu_temperature_sample(self.TEXT, PATTERN, prefer_dts=True)
+        self.assertEqual(sample.temp, 65.0)
+        self.assertEqual(sample.readings, (("CPU1_DTS", 65.0),))
+
+    def test_prefer_temp_uses_package_temp(self):
+        sample = cpu_temperature_sample(self.TEXT, PATTERN, prefer_dts=False)
+        self.assertEqual(sample.temp, 37.0)
+        self.assertEqual(sample.valid, 2)
+
+    def test_prefer_temp_falls_back_to_dts_when_pattern_misses(self):
+        text = "CPU1_DTS | 65 | degrees C | ok"
+        sample = cpu_temperature_sample(
+            text, re.compile(r"^no_match$"), prefer_dts=False
+        )
+        self.assertEqual(sample.temp, 65.0)

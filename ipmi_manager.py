@@ -105,6 +105,7 @@ class Config:
     sensor_pattern: str
     command_timeout: float
     na_grace: int
+    use_dts: bool = True
 
 
 class SensorClient(Protocol):
@@ -195,8 +196,15 @@ def _temperature_value(reading: str) -> float | None:
     return value
 
 
-def cpu_temperature_sample(text: str, fallback: re.Pattern[str]) -> Sample:
-    """优先用 CPU DTS。没有 DTS 时再用配置里的传感器表达式。"""
+def cpu_temperature_sample(
+    text: str, fallback: re.Pattern[str], prefer_dts: bool = True
+) -> Sample:
+    """挑 CPU 温度。prefer_dts 为真时优先 CPUx_DTS，否则先用 fallback 表达式。"""
+    if not prefer_dts:
+        try:
+            return parse_sensor_output(text, fallback)
+        except SensorParseError:
+            pass
     found: list[tuple[str, float | None]] = []
     for raw in text.splitlines():
         if "|" not in raw:
@@ -377,10 +385,12 @@ class Controller:
         dry_run: bool,
         exit_speed: int | None,
         log: logging.Logger,
+        use_dts: bool = True,
     ) -> None:
         self.policy = policy
         self.client = client
         self.pattern = re.compile(sensor_pattern, re.IGNORECASE)
+        self.use_dts = use_dts
         self.dry_run = dry_run
         self.exit_speed = exit_speed
         self.log = log
@@ -396,7 +406,9 @@ class Controller:
         self.last_error = None
         power_on = chassis_power_on(client)
         try:
-            self.last_sample = cpu_temperature_sample(client.read_sensors(), pattern)
+            self.last_sample = cpu_temperature_sample(
+                client.read_sensors(), pattern, prefer_dts=self.use_dts
+            )
         except (IpmiError, SensorParseError) as exc:
             self.last_sample = None
             self.last_error = str(exc)
@@ -564,6 +576,10 @@ def parse_config(
     except re.error as exc:
         raise ConfigError(f"sensor_pattern 无效：{exc}") from exc
 
+    use_dts = data.get("use_dts", True)
+    if not isinstance(use_dts, bool):
+        raise ConfigError("use_dts 需要 true 或 false")
+
     return Config(
         target=IpmiTarget(interface, host, username, password),
         bands=_bands(data.get("fan_speeds")),
@@ -576,6 +592,7 @@ def parse_config(
         sensor_pattern=pattern,
         command_timeout=timeout,
         na_grace=na_grace,
+        use_dts=use_dts,
     )
 
 
@@ -694,6 +711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
         exit_speed=config.exit_speed,
         log=LOG,
+        use_dts=config.use_dts,
     )
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)

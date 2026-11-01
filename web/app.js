@@ -86,6 +86,7 @@ function collect() {
     min_speed_on: Math.round(Number(document.getElementById("min-speed").value)),
     fallback_speed: Math.round(Number(document.getElementById("fallback").value)),
     exit_speed: exitRaw === "" ? "" : Math.round(Number(exitRaw)),
+    use_dts: document.getElementById("use-dts").value === "true",
     bands,
   };
 }
@@ -286,6 +287,7 @@ function fillForm(config) {
   setIfIdle("min-speed", config.min_speed_on);
   setIfIdle("fallback", config.fallback_speed);
   setIfIdle("exit-speed", config.exit_speed == null ? "" : config.exit_speed);
+  setIfIdle("use-dts", config.use_dts === false ? "false" : "true");
   document.getElementById("password").placeholder = state.has_password ? "留空保持" : "BMC 密码";
   document.getElementById("demo").checked = state.demo;
   syncIface();
@@ -444,6 +446,7 @@ document.querySelector(".policy").addEventListener("input", () => {
   stopHint();
   markDirty();
 });
+document.querySelector(".policy").addEventListener("change", markDirty);
 document.querySelector(".link").addEventListener("input", markDirty);
 document.getElementById("iface").addEventListener("change", syncIface);
 document.getElementById("add-band").addEventListener("click", addBand);

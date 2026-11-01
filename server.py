@@ -110,6 +110,7 @@ def dump_config(config: Config) -> str:
         f"na_grace: {config.na_grace}",
         f"command_timeout: {_plain(config.command_timeout)}",
         f"sensor_pattern: {yaml_scalar(config.sensor_pattern)}",
+        f"use_dts: {'true' if config.use_dts else 'false'}",
         "fan_speeds:",
     ])
     for band in config.bands:
@@ -166,6 +167,7 @@ class Console:
             dry_run=False,
             exit_speed=config.exit_speed,
             log=self.log,
+            use_dts=config.use_dts,
         )
 
     def add_log(self, level: str, message: str) -> None:
@@ -208,6 +210,7 @@ class Console:
                     "fallback_speed": config.fallback_speed,
                     "min_speed_on": config.min_speed_on,
                     "exit_speed": config.exit_speed,
+                    "use_dts": config.use_dts,
                     "bands": [
                         {"low": _plain(band.low), "high": _plain(band.high), "speed": band.speed}
                         for band in config.bands
@@ -246,6 +249,7 @@ class Console:
             )
             self.controller.pattern = self.pattern
             self.controller.exit_speed = config.exit_speed
+            self.controller.use_dts = config.use_dts
             if not self.demo:
                 self.client = self._real_client()
                 self.controller.client = self.client
@@ -286,6 +290,7 @@ class Console:
             "na_grace": config.na_grace,
             "command_timeout": config.command_timeout,
             "sensor_pattern": config.sensor_pattern,
+            "use_dts": payload.get("use_dts", config.use_dts),
             "fan_speeds": [
                 {"temp_range": [band["low"], band["high"]], "speed": band["speed"]}
                 for band in bands
@@ -309,9 +314,10 @@ class Console:
             self._ready()
             client = self.client
             pattern = self.pattern
+            use_dts = self.config.use_dts
         try:
             text = client.read_sensors()
-            sample = cpu_temperature_sample(text, pattern)
+            sample = cpu_temperature_sample(text, pattern, prefer_dts=use_dts)
             power_on = chassis_power_on(client)
         except (IpmiError, SensorParseError) as exc:
             with self.lock:
